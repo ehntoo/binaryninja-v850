@@ -73,6 +73,16 @@ NoRegisterInstructions = {
     0x40: 'rie',
 }
 
+ThirtyTwoBitNoRegisterInstructions = {
+    0x07e00120: 'halt',
+    0x07e00140: 'reti',
+    0x07e00144: 'ctret',
+    0x07e00148: 'eiret',
+    0x07e0014a: 'feret',
+    0x07e00160: 'di',
+    0x87e00160: 'ei'
+}
+
 OneRegInstructions = [
     'switch', 'zxb', 'sxb', 'zxh', 'sxh'
 ]
@@ -86,14 +96,31 @@ RegImmediateInstructions = [
     'mov', 'satadd', 'add', 'cmp', 'shr', 'sar', 'shl', 'mulh'
 ]
 
+ImmediateRegRegInstructions = [
+    'addi', 'movea', 'movhi', 'satsubi', 'ori', 'xori', 'andi', 'mulhi'
+]
+
+LoadInstructions = [
+    'ld.b', 'ld.bu', 'ld.h', 'ld.hu', 'ld.w',
+    'sld.b', 'sld.bu', 'sld.h', 'sld.hu', 'sld.w'
+]
+
+StoreInstructions = [
+    'st.b', 'st.h', 'st.w',
+    'sst.b', 'sst.h', 'sst.w'
+]
+
+# TODO: instructions with conditions: ADF, SBF, SETF, B, CMOV, SASF
+# TODO: Instructions with PC-relative immediates: JARL, JR, B (done!) - also loads and stores
+
 TypeOneRegRegInstructions = {
     0x00: lambda reg1, reg2: ('mov', reg1, reg2),
     0x01: lambda reg1, reg2: ('not', reg1, reg2),
     0x02: lambda reg1, reg2: ('switch', None, reg1) if reg2 == 0 else ('fetrap', None, reg2 & 0xf) if reg1 == 0 else ('divh', reg1, reg2),
-    0x04: lambda reg1, reg2: ('satsubr', reg1, reg2) if reg2 == 0 else ('zxb', None, reg1),
-    0x05: lambda reg1, reg2: ('satsub', reg1, reg2) if reg2 == 0 else ('sxb', None, reg1),
-    0x06: lambda reg1, reg2: ('satadd', reg1, reg2) if reg2 == 0 else ('zxh', None, reg1),
-    0x07: lambda reg1, reg2: ('mulh', reg1, reg2) if reg2 == 0 else ('sxh', None, reg1),
+    0x04: lambda reg1, reg2: ('satsubr', reg1, reg2) if reg2 != 0 else ('zxb', None, reg1),
+    0x05: lambda reg1, reg2: ('satsub', reg1, reg2) if reg2 != 0 else ('sxb', None, reg1),
+    0x06: lambda reg1, reg2: ('satadd', reg1, reg2) if reg2 != 0 else ('zxh', None, reg1),
+    0x07: lambda reg1, reg2: ('mulh', reg1, reg2) if reg2 != 0 else ('sxh', None, reg1),
     0x08: lambda reg1, reg2: ('or', reg1, reg2),
     0x09: lambda reg1, reg2: ('xor', reg1, reg2),
     0x0a: lambda reg1, reg2: ('and', reg1, reg2),
@@ -105,7 +132,7 @@ TypeOneRegRegInstructions = {
 }
 
 TypeOneImmediateRegInstructions = {
-    0x03: lambda reg1, reg2: ('jmp', reg1, None) if reg2 == 0 else ('sld.hu', (reg1 & 0xf) << 1, reg2) if reg1 & 0x10 == 0x10 else ('sld.bu', reg1 & 0xf, reg2),
+    0x03: lambda reg1, reg2: ('jmp', None, reg1) if reg2 == 0 else ('sld.hu', (reg1 & 0xf) << 1, reg2) if reg1 & 0x10 == 0x10 else ('sld.bu', reg1 & 0xf, reg2),
     0x10: lambda reg1, reg2: ('mov', sign_extend(reg1, 5), reg2),
     0x11: lambda reg1, reg2: ('satadd', reg1, reg2),
     0x12: lambda reg1, reg2: ('add', sign_extend(reg1, 5), reg2),
@@ -162,7 +189,8 @@ def decode_dispose(i1, i2):
 def decode_3c_and_3d(data):
     i1 = struct.unpack('<H', data[0:2])[0]
     i2 = struct.unpack('<H', data[2:4])[0]
-    reg2 = (i1 >> 11) & 0x1f
+    reg1 = i1 & 0x1f
+    reg2 = i1 >> 11
 
     if i2 & 0x1 == 0 and reg2 != 0:
         return 'jarl', 4, None, reg2, sign_extend(((i1 & 0x3f) << 16) | i2, 22)
@@ -185,51 +213,147 @@ def decode_3c_and_3d(data):
         reg_list = Register_List()
         reg_list.asWord = ((i1 & 0x1) << 11) | (i2 >> 5)
         return 'prepare', 4, Registers.index('sp'), reg_list, immed
+
+    i3 = struct.unpack('<H', data[4:6])[0]
+
     if subop == 0xb or subop == 0x13:
         immed = ((i1 >> 1) & 0x1f) << 2
         reg_list = Register_List()
         reg_list.asWord = ((i1 & 0x1) << 11) | (i2 >> 5)
-        i3 = struct.unpack('<H', data[4:6])[0]
         return 'prepare', 6, sign_extend(i3, 16) if subop == 0xb else i3 << 16, reg_list, immed
     if subop == 0x1b:
         immed = ((i1 >> 1) & 0x1f) << 2
         reg_list = Register_List()
         reg_list.asWord = ((i1 & 0x1) << 11) | (i2 >> 5)
-        i3 = struct.unpack('<H', data[4:6])[0]
         i4 = struct.unpack('<H', data[6:8])[0]
         return 'prepare', 8, i4 << 16 | i3, reg_list, immed
 
-    composite_opcode = (i1 & 0x20) | (i2 & 0x1f)
+    composite_opcode = (i1 & 0x20) | (i2 & 0xf)
     reg3 = (i2 >> 11) & 0x1f
-    return LongLoadStoreInstructions[composite_opcode](reg1, reg3, disp22)
+    disp23 = ((i2 >> 4) & 0x7f) | (i3 << 7)
+    if composite_opcode in LongLoadStoreInstructions:
+        return LongLoadStoreInstructions[composite_opcode](reg1, reg3, disp23)
+    return None, None, None, None, None
 
 LongLoadStoreInstructions = {
-    0x05: lambda reg1, reg3, disp22: ('ld.b', 6, reg1, reg3, sign_extend(disp22 << 1), 23),
-    0x15: lambda reg1, reg3, disp22: ('ld.b', 6, reg1, reg3, sign_extend((disp22 << 1) | 1), 23),
-    0x07: lambda reg1, reg3, disp22: ('ld.h', 6, reg1, reg3, sign_extend(disp22 << 1), 23),
-    0x09: lambda reg1, reg3, disp22: ('ld.w', 6, reg1, reg3, sign_extend(disp22 << 1), 23),
-    0x0d: lambda reg1, reg3, disp22: ('st.b', 6, reg3, reg1, sign_extend(disp22 << 1), 23),
-    0x1d: lambda reg1, reg3, disp22: ('st.b', 6, reg3, reg1, sign_extend((disp22 << 1) | 1), 23),
-    0x0f: lambda reg1, reg3, disp22: ('st.w', 6, reg3, reg1, sign_extend(disp22 << 1), 23),
-    0x25: lambda reg1, reg3, disp22: ('ld.bu', 6, reg1, reg3, sign_extend(disp22 << 1), 23),
-    0x35: lambda reg1, reg3, disp22: ('ld.bu', 6, reg1, reg3, sign_extend((disp22 << 1) | 1), 23),
-    0x27: lambda reg1, reg3, disp22: ('ld.hu', 6, reg1, reg3, sign_extend(disp22 << 1), 23),
-    0x2d: lambda reg3, reg1, disp22: ('st.h', 6, reg1, reg3, sign_extend(disp22 << 1), 23),
+    0x05: lambda reg1, reg3, disp23: ('ld.b', 6, reg1, reg3, sign_extend(disp23, 23)),
+    0x07: lambda reg1, reg3, disp23: ('ld.h', 6, reg1, reg3, sign_extend(disp23, 23)),
+    0x09: lambda reg1, reg3, disp23: ('ld.w', 6, reg1, reg3, sign_extend(disp23, 23)),
+    0x0d: lambda reg1, reg3, disp23: ('st.b', 6, reg3, reg1, sign_extend(disp23, 23)),
+    0x0f: lambda reg1, reg3, disp23: ('st.w', 6, reg3, reg1, sign_extend(disp23, 23)),
+    0x25: lambda reg1, reg3, disp23: ('ld.bu', 6, reg1, reg3, sign_extend(disp23, 23)),
+    0x27: lambda reg1, reg3, disp23: ('ld.hu', 6, reg1, reg3, sign_extend(disp23, 23)),
+    0x2d: lambda reg3, reg1, disp23: ('st.h', 6, reg1, reg3, sign_extend(disp23, 23)),
 }
 
 SimpleThirtyTwoBitInstructions = {
     0x30: lambda reg1, reg2, _, i2, _2: ('addi', 4, reg1, reg2, sign_extend(i2, 16)),
     0x31: lambda reg1, reg2, _, i2, i3: ('movea', 4, reg1, reg2, sign_extend(i2, 16)) if reg2 != 0 else ('mov', 6, None, reg1, (i3 << 16) | i2),
-    0x32: lambda reg1, reg2, i1, i2, i3: ('movhi', 4, reg1, reg2, i2 << 16) if reg2 != 0 else decode_dispose(i1, i2),
+    # 0x32: lambda reg1, reg2, i1, i2, i3: ('movhi', 4, reg1, reg2, i2 << 16) if reg2 != 0 else decode_dispose(i1, i2),
+    0x32: lambda reg1, reg2, i1, i2, i3: ('movhi', 4, reg1, reg2, i2) if reg2 != 0 else decode_dispose(i1, i2),
     0x33: lambda reg1, reg2, i1, i2, i3: ('satsubi', 4, reg1, reg2, i2 << 16) if reg2 != 0 else decode_dispose(i1, i2),
     0x34: lambda reg1, reg2, _, i2, _2: ('ori', 4, reg1, reg2, i2),
     0x35: lambda reg1, reg2, _, i2, _2: ('xori', 4, reg1, reg2, i2),
     0x36: lambda reg1, reg2, _, i2, _2: ('andi', 4, reg1, reg2, i2),
-    0x37: lambda reg1, reg2, _, i2, i3: ('mulhi', 4, reg1, reg2, i2) if reg2 != 0 else ('jmp', 6, reg1, None, (i2 << 16) | i3),
+    0x37: lambda reg1, reg2, _, i2, i3: ('mulhi', 4, reg1, reg2, i2) if reg2 != 0 else ('jmp', 6, None, reg1, (i3 << 16) | i2),
     0x38: lambda reg1, reg2, _, i2, _2: ('ld.b', 4, reg1, reg2, sign_extend(i2, 16)),
     0x39: lambda reg1, reg2, _, i2, _2: ('ld.h', 4, reg1, reg2, sign_extend(i2, 16)) if i2 & 0x1 == 0 else ('ld.w', 4, reg1, reg2, sign_extend(i2 & 0xfffe, 16)),
     0x3a: lambda reg1, reg2, _, i2, _2: ('st.b', 4, reg2, reg1, sign_extend(i2, 16)),
     0x3b: lambda reg1, reg2, _, i2, _2: ('st.h', 4, reg2, reg1, sign_extend(i2, 16)) if i2 & 0x1 == 0 else ('st.w', 4, reg2, reg1, sign_extend(i2 & 0xfffe, 16)),
+}
+
+ExtendedInstructions = {
+    0x01: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
+        0: lambda reg1, reg2, _, _2: ('ldsr', 4, reg1, reg2, None, None, None, None)
+    }),
+    0x02: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
+        0: lambda reg1, reg2, _, _2: ('stsr', 4, reg1, reg2, None, None, None, None)
+    }),
+    0x04: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
+        0x0: lambda reg1, reg2, _, _2: ('shr', 4, reg1, reg2, None, None, None, None),
+        0x2: lambda reg1, reg2, _, i2: ('shr', 4, reg1, reg2, i2 >> 11, None, None, None),
+    }),
+    0x05: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
+        0x0: lambda reg1, reg2, _, _2: ('sar', 4, reg1, reg2, None, None, None, None),
+        0x2: lambda reg1, reg2, _, i2: ('sar', 4, reg1, reg2, i2 >> 11, None, None, None),
+    }),
+    0x06: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
+        0x0: lambda reg1, reg2, _, _2: ('shl', 4, reg1, reg2, None, None, None, None),
+        0x2: lambda reg1, reg2, _, i2: ('shl', 4, reg1, reg2, i2 >> 11, None, None, None),
+    }),
+    0x07: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
+        0x0: lambda reg1, reg2, _, _2: ('set1', 4, reg1, reg2, None, None, None, None),
+        0x2: lambda reg1, reg2, _, _2: ('not1', 4, reg1, reg2, None, None, None, None),
+        0x4: lambda reg1, reg2, _, _2: ('clr1', 4, reg1, reg2, None, None, None, None),
+        0x6: lambda reg1, reg2, _, _2: ('tst1', 4, reg1, reg2, None, None, None, None),
+        0xe: lambda reg1, reg2, _, i2: ('caxi', 4, reg1, reg2, i2 >> 11, None, None, None),
+    }),
+    0x0b: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
+        0x0: lambda reg1, reg2, i1, i2: ('syscall', 4, None, None, None, None, ((i2 >> 11) & 0x7) | (i1 & 0x1f), None),
+    }),
+    0x10: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
+        0x0: lambda reg1, reg2, _, _2: ('sasf', 4, None, reg2, None, None, None, reg1 & 0xf),
+    }),
+    0x11: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
+        0x0: lambda reg1, reg2, _, i2: ('mul', 4, reg1, reg2, i2 >> 11, None, None, None),
+        0x2: lambda reg1, reg2, _, i2: ('mulu', 4, reg1, reg2, i2 >> 11, None, None, None),
+    }),
+    0x12: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
+        0x0: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+        0x4: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+        0x8: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+        0xc: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+        0x10: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+        0x14: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+        0x18: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+        0x1c: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+        0x2: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+        0x6: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+        0xa: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+        0xe: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+        0x12: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+        0x16: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+        0x1a: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+        0x1e: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+    }),
+    0x13: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
+        0x0: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+        0x2: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+    }),
+    0x14: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
+        0x0: lambda reg1, reg2, _, i2: ('divh', 4, reg1, reg2, i2 >> 11, None, None, None),
+        0x2: lambda reg1, reg2, _, i2: ('divhu', 4, reg1, reg2, i2 >> 11, None, None, None),
+    }),
+    0x16: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
+        0x0: lambda reg1, reg2, _, i2: ('div', 4, reg1, reg2, i2 >> 11, None, None, None),
+        0x2: lambda reg1, reg2, _, i2: ('divu', 4, reg1, reg2, i2 >> 11, None, None, None),
+    }),
+    0x17: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
+        0x1c: lambda reg1, reg2, _, i2: ('divq', 4, reg1, reg2, i2 >> 11, None, None, None),
+        0x1e: lambda reg1, reg2, _, i2: ('divqu', 4, reg1, reg2, i2 >> 11, None, None, None),
+    }),
+    0x18: defaultdict(lambda: lambda reg1, reg2, i1, i2: ('cmov', 4, reg2, i2 >> 11, None, None, reg1, sign_extend((i2 >> 1) & 0xf, 5))),
+    0x19: defaultdict(lambda: lambda reg1, reg2, i1, i2: ('cmov', 4, reg2, i2 >> 11, reg1, None, reg1, None)),
+    0x1a: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
+        0x0: lambda reg1, reg2, _, i2: ('bsw', 4, reg2, i2 >> 11, None, None, None, None),
+        0x2: lambda reg1, reg2, _, i2: ('bsh', 4, reg2, i2 >> 11, None, None, None, None),
+        0x4: lambda reg1, reg2, _, i2: ('hsw', 4, reg2, i2 >> 11, None, None, None, None),
+        0x6: lambda reg1, reg2, _, i2: ('hsh', 4, reg2, i2 >> 11, None, None, None, None),
+    }),
+    0x1b: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
+        0x0: lambda reg1, reg2, _, i2: ('sch0r', 4, reg2, i2 >> 11, None, None, None, None),
+        0x2: lambda reg1, reg2, _, i2: ('sch1r', 4, reg2, i2 >> 11, None, None, None, None),
+        0x4: lambda reg1, reg2, _, i2: ('sch0l', 4, reg2, i2 >> 11, None, None, None, None),
+        0x6: lambda reg1, reg2, _, i2: ('sch1l', 4, reg2, i2 >> 11, None, None, None, None),
+    }),
+    0x1c: defaultdict(lambda: lambda reg1, reg2, i1, i2: ('sbf', 4, reg1, reg2, i2 >> 11, None, reg1, (i2 >> 1) & 0xf), {
+        0x1a: lambda reg1, reg2, _, i2: ('satsub', 4, reg1, reg2, i2 >> 11, None, None, None),
+    }),
+    0x1d: defaultdict(lambda: lambda reg1, reg2, i1, i2: ('adf', 4, reg1, reg2, i2 >> 11, None, reg1, (i2 >> 1) & 0xf), {
+        0x1a: lambda reg1, reg2, _, i2: ('satadd', 4, reg1, reg2, i2 >> 11, None, None, None),
+    }),
+    0x1e: defaultdict(lambda: lambda reg1, reg2, i1, i2: ('mac', 4, reg1, reg2, i2 >> 11, i2 & 0x1f, None, None)),
+    0x1f: defaultdict(lambda: lambda reg1, reg2, i1, i2: ('macu', 4, reg1, reg2, i2 >> 11, i2 & 0x1f, None, None)),
 }
 
 ConditionCode = [
@@ -239,6 +363,12 @@ ConditionCode = [
     'p', 'sa', 'ge', 'gt'
 ]
 
+BranchConditionCode = [
+    'bv', 'bl', 'be', 'bnh',
+    'bn', 'br', 'blt', 'ble',
+    'bnv', 'bnl', 'bne', 'bh',
+    'bp', 'bsa', 'bge', 'bgt'
+]
 
 class V850(Architecture):
     name = 'V850'
@@ -312,14 +442,14 @@ class V850(Architecture):
     }
 
     def decode_instruction(self, data, addr):
-        error_value = (None, None, None, None, None)
+        error_value = (None, None, None, None, None, None, None, None)
         if len(data) < 2:
             return error_value
 
         instruction = struct.unpack('<H', data[0:2])[0]
         # is this a zero-register instruction?
         if instruction in NoRegisterInstructions:
-            return (NoRegisterInstructions[instruction], 2, None, None, None)
+            return (NoRegisterInstructions[instruction], 2, None, None, None, None, None, None)
 
         opcode = (instruction >> 5) & 0x3f
         reg1 = (instruction & 0x1f)
@@ -327,51 +457,78 @@ class V850(Architecture):
 
         if opcode in TypeOneRegRegInstructions:
             instr, src, dst = TypeOneRegRegInstructions[opcode](reg1, reg2)
-            return (instr, 2, src, dst, None)
+            return (instr, 2, src, dst, None, None, None, None)
 
         if opcode in TypeOneImmediateRegInstructions:
             instr, immed, dst = TypeOneImmediateRegInstructions[opcode](reg1, reg2)
-            return (instr, 2, None, dst, immed)
+            return (instr, 2, None, dst, None, None, immed, None)
 
         # 0x17: mulh, jr, jarl
         if opcode == 0x17:
             if reg1 == reg2 == 0:
-                return 'jr', 6, None, None, (struct.unpack('<H', data[4:6])[0] << 16) | struct.unpack('<H', data[2:4])[0]
+                return 'jr', 6, None, None, None, None, (struct.unpack('<H', data[4:6])[0] << 16) | struct.unpack('<H', data[2:4])[0], None
             if reg2 == 0:
-                return 'jarl', 6, None, reg1, sign_extend((struct.unpack('<H', data[4:6])[0] << 16) | struct.unpack('<H', data[2:4])[0], 32) 
+                return 'jarl', 6, None, reg1, None, None, sign_extend((struct.unpack('<H', data[4:6])[0] << 16) | struct.unpack('<H', data[2:4])[0], 32), None 
             else:
-                return 'mulh', 2, None, reg2, reg1
+                return 'mulh', 2, None, reg2, None, None, reg1, None
 
         # Handle short load store instructions
         if opcode >= 0x18 and opcode <= 0x2b:
             disp = instruction & 0x7f
             load_store_type = opcode >> 2
             instr, src, dst, immed = TypeFourShortLoadStoreInstructions[load_store_type](reg2, disp)
-            return instr, 2, src, dst, immed
+            return instr, 2, src, dst, None, None, immed, None
 
         # Handle branches
         if opcode >= 0x2c and opcode <= 0x2f:
             disp = (reg2 << 3) | ((instruction >> 4) & 0x7)
-            return 'b'+ConditionCode[instruction & 0xf], 2, None, None, sign_extend(disp, 9)
+            return BranchConditionCode[instruction & 0xf], 2, None, None, None, None, sign_extend(disp << 1, 9), None
 
         instruction2 = struct.unpack('<H', data[2:4])[0]
-        instruction3 = struct.unpack('<H', data[4:6])[0]
+        instruction_word = instruction << 16 | instruction2
+
+        if instruction_word in ThirtyTwoBitNoRegisterInstructions:
+            return ThirtyTwoBitNoRegisterInstructions[instruction_word], 4, None, None, None, None, None, None
 
         if opcode in SimpleThirtyTwoBitInstructions:
-            return SimpleThirtyTwoBitInstructions[opcode](reg1, reg2, instruction, instruction2, instruction3)
+            if len(data) >= 6:
+                instruction3 = struct.unpack('<H', data[4:6])[0]
+            else:
+                instruction3 = None
+            instr, size, src, dst, immed = SimpleThirtyTwoBitInstructions[opcode](reg1, reg2, instruction, instruction2, instruction3)
+            return instr, size, src, dst, None, None, immed, None
 
         if opcode == 0x3c or opcode == 0x3d:
-            return decode_3c_and_3d(data)
+            instr, size, src, dst, immed = decode_3c_and_3d(data)
+            return instr, size, src, dst, None, None, immed, None
+
         if opcode == 0x3e:
             bitop = instruction >> 14
             bitnum = (instruction >> 11) & 0x7
-            return BitManipulationInstructions[bitop](reg1, bitnum, instruction2)
+            instr, size, src, dst, immed = BitManipulationInstructions[bitop](reg1, bitnum, instruction2)
+            return instr, size, src, dst, None, None, immed, None
 
-        # return instr, length, src_reg, dst_reg, immed
+        if opcode == 0x3f and instruction2 & 0x1 == 0x1:
+            disp = (instruction2 & 0xfffe)
+            return 'ld.hu', 4, reg1, reg2, None, None, sign_extend(disp, 16), None
+
+        if opcode == 0x3f and instruction2 == 0:
+            if reg1 & 0x10 == 0:
+                return 'setf', 4, reg1, reg2, None, None, None, None
+            else:
+                return 'rie', 4, reg2, reg1 & 0xf, None, None, None, None
+
+        subop = (instruction2 >> 5) & 0x3f
+        if opcode == 0x3f and subop in ExtendedInstructions:
+            sub_subop = instruction2 & 0x1f
+            instr, size, src, dst, r3, r4, immed, cond = ExtendedInstructions[subop][sub_subop](reg1, reg2, instruction, instruction2)
+            return instr, size, src, dst, r3, r4, immed, cond
+
+        # return instr, length, src_reg, dst_reg, reg3, reg4, immed, cond
         return error_value
 
     def perform_get_instruction_info(self, data, addr):
-        instr, length, src_reg, _, immed = self.decode_instruction(data, addr)
+        instr, length, src_reg, dst_reg, reg3, reg4, immed, cond = self.decode_instruction(data, addr)
         if instr is None:
             return None
 
@@ -401,7 +558,7 @@ class V850(Architecture):
         # return result
 
     def perform_get_instruction_text(self, data, addr):
-        instr, length, src_reg, dst_reg, immed = self.decode_instruction(data, addr)
+        instr, length, src_reg, dst_reg, reg3, reg4, immed, cond = self.decode_instruction(data, addr)
         if instr is None:
             return None
 
@@ -413,7 +570,7 @@ class V850(Architecture):
         # if instr in NoRegisterInstructions.values():
         #     return tokens, length
         if instr in OneRegInstructions and dst_reg is not None:
-            tokens += InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[dst_reg])
+            tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[dst_reg])]
 
         if instr in TwoRegInstructions and src_reg is not None and dst_reg is not None and immed is None:
             tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[src_reg])]
@@ -423,12 +580,59 @@ class V850(Architecture):
         if instr in RegImmediateInstructions and src_reg is None and dst_reg is not None and immed is not None:
             # print("instr: ", instr, "immediate: ", immed, "register: ", Registers[dst_reg])
             tokens += [InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(immed))]
-            tokens += [InstructionTextToken(InstructionTextTokenType.TextToken, ',')]
+            tokens += [InstructionTextToken(InstructionTextTokenType.TextToken, ', ')]
             tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[dst_reg])]
 
-        if instr[0] == 'b':
-            # TODO - fix targets
-            tokens += [InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(immed))]
+        if instr in ImmediateRegRegInstructions and src_reg is not None and dst_reg is not None and immed is not None:
+            tokens += [InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(immed))]
+            tokens += [InstructionTextToken(InstructionTextTokenType.TextToken, ', ')]
+            tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[src_reg])]
+            tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ', ')]
+            tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[dst_reg])]
+
+        if instr in LoadInstructions:
+            tokens += [InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(immed))]
+            tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, '[')]
+            if src_reg is None:
+                tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, 'ep')]
+            else:
+                tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[src_reg])]
+            tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, '], ')]
+            tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[dst_reg])]
+
+        if instr in StoreInstructions:
+            tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[src_reg])]
+            tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ', ')]
+            tokens += [InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(immed))]
+            tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, '[')]
+            if dst_reg is None:
+                tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, 'ep')]
+            else:
+                tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[dst_reg])]
+            tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ']')]
+
+        if instr == 'jmp':
+            if immed is not None:
+                tokens += [InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(immed))]
+            tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, '[')]
+            tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[dst_reg])]
+            tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ']')]
+
+        if instr == 'jr':
+            branch_target = immed + addr
+            tokens += [InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(branch_target))]
+
+        if instr == 'jarl':
+            branch_target = immed + addr
+            tokens += [InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(branch_target))]
+            tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ', ')]
+            tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[dst_reg])]
+
+        if instr[0] == 'b' and instr != 'bsw' and instr != 'bsh':
+            # TODO - consider what the best place to fix up immediates is
+            print("printing instruction for", instr, "immed", immed, "addr", addr)
+            branch_target = immed + addr
+            tokens += [InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(branch_target))]
             # tokens += [InstructionTextToken(InstructionTextTokenType.TextToken, immed)]
 
         return tokens, length
@@ -466,8 +670,13 @@ class V850(Architecture):
         #
         # return tokens, length
 
-    # def perform_get_instruction_low_level_il(self, data, addr, il):
-        #     il.append(il.unimplemented())
+    def perform_get_instruction_low_level_il(self, data, addr, il):
+        instr, length, src_reg, dst_reg, reg3, reg4, immed, cond = self.decode_instruction(data, addr)
+        if instr is None:
+            return None
+
+        il.append(il.unimplemented())
+        return length
         # (instr, width,
         #     src_operand, dst_operand,
         #     src, dst, length,
