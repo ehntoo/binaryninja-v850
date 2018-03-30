@@ -249,7 +249,6 @@ LongLoadStoreInstructions = {
 SimpleThirtyTwoBitInstructions = {
     0x30: lambda reg1, reg2, _, i2, _2: ('addi', 4, reg1, reg2, sign_extend(i2, 16)),
     0x31: lambda reg1, reg2, _, i2, i3: ('movea', 4, reg1, reg2, sign_extend(i2, 16)) if reg2 != 0 else ('mov', 6, None, reg1, (i3 << 16) | i2),
-    # 0x32: lambda reg1, reg2, i1, i2, i3: ('movhi', 4, reg1, reg2, i2 << 16) if reg2 != 0 else decode_dispose(i1, i2),
     0x32: lambda reg1, reg2, i1, i2, i3: ('movhi', 4, reg1, reg2, i2) if reg2 != 0 else decode_dispose(i1, i2),
     0x33: lambda reg1, reg2, i1, i2, i3: ('satsubi', 4, reg1, reg2, i2 << 16) if reg2 != 0 else decode_dispose(i1, i2),
     0x34: lambda reg1, reg2, _, i2, _2: ('ori', 4, reg1, reg2, i2),
@@ -370,19 +369,63 @@ BranchConditionCode = [
     'bp', 'bsa', 'bge', 'bgt'
 ]
 
+BranchConditionToILCondition = [
+    LowLevelILFlagCondition.LLFC_O,
+    LowLevelILFlagCondition.LLFC_ULT,
+    LowLevelILFlagCondition.LLFC_E,
+    LowLevelILFlagCondition.LLFC_ULE,
+    LowLevelILFlagCondition.LLFC_NEG,
+    None,
+    LowLevelILFlagCondition.LLFC_SLT,
+    LowLevelILFlagCondition.LLFC_SLE,
+    LowLevelILFlagCondition.LLFC_NO,
+    LowLevelILFlagCondition.LLFC_UGE,
+    LowLevelILFlagCondition.LLFC_NE,
+    LowLevelILFlagCondition.LLFC_UGT,
+    LowLevelILFlagCondition.LLFC_POS,
+    None, # Saturated
+    LowLevelILFlagCondition.LLFC_SGE,
+    LowLevelILFlagCondition.LLFC_SGT,
+]
+
+StorageSize = {'b': 1, 'h': 2, 'w': 4, 'bu': 1, 'hu': 2}
+
+def to_il_src_reg(il, reg):
+    return il.reg(4, Registers[reg]) if reg != 0 else il.const(0, 0)
+
+def to_il_dst_reg(il, reg):
+    return il.reg(4, Registers[reg]) if reg != 0 else il.undefined()
+
+def cond_branch(il, cond, dest):
+    t = None
+    if il[dest].operation == LowLevelILOperation.LLIL_CONST:
+        t = il.get_label_for_address(Architecture['V850'], il[dest].constant)
+    if t is None:
+        t = LowLevelILLabel()
+        indirect = True
+    else:
+        indirect = False
+    f = LowLevelILLabel()
+    il.append(il.if_expr(cond, t, f))
+    if indirect:
+        il.mark_label(t)
+        il.append(il.jump(dest))
+    il.mark_label(f)
+    return None
+
 class V850(Architecture):
     name = 'V850'
     address_size = 4
     default_int_size = 4
     max_instr_length = 8
-    stack_pointer = 'r3'
+    stack_pointer = 'sp'
     link_reg = 'lp'
 
     regs = {
         'r0': RegisterInfo('r0', 4),
         'r1': RegisterInfo('r1', 4),
         'r2': RegisterInfo('r2', 4),
-        'r3': RegisterInfo('r3', 4),
+        'sp': RegisterInfo('sp', 4),
         'r4': RegisterInfo('r4', 4),
         'r5': RegisterInfo('r5', 4),
         'r6': RegisterInfo('r6', 4),
@@ -414,6 +457,7 @@ class V850(Architecture):
         'pc': RegisterInfo('pc', 4),
     }
 
+    global_regs = ['pc']
     flags = ['sat', 'cy', 'ov', 's', 'z']
     flag_roles = {
         'sat': FlagRole.SpecialFlagRole,
@@ -423,9 +467,15 @@ class V850(Architecture):
         'z': FlagRole.ZeroFlagRole,
     }
     flags_required_for_flag_condition = {
+        LowLevelILFlagCondition.LLFC_O: ['ov'],
+        LowLevelILFlagCondition.LLFC_NO: ['ov'],
         LowLevelILFlagCondition.LLFC_UGE: ['cy'],
         LowLevelILFlagCondition.LLFC_ULT: ['cy'],
+        LowLevelILFlagCondition.LLFC_UGT: ['cy', 'z'],
+        LowLevelILFlagCondition.LLFC_ULE: ['cy', 'z'],
         LowLevelILFlagCondition.LLFC_SGE: ['s', 'ov'],
+        LowLevelILFlagCondition.LLFC_SGT: ['s', 'ov', 'z'],
+        LowLevelILFlagCondition.LLFC_SLE: ['s', 'ov', 'z'],
         LowLevelILFlagCondition.LLFC_SLT: ['s', 'ov'],
         LowLevelILFlagCondition.LLFC_E: ['z'],
         LowLevelILFlagCondition.LLFC_NE: ['z'],
@@ -527,13 +577,39 @@ class V850(Architecture):
         # return instr, length, src_reg, dst_reg, reg3, reg4, immed, cond
         return error_value
 
-    def perform_get_instruction_info(self, data, addr):
+    def get_instruction_info(self, data, addr):
         instr, length, src_reg, dst_reg, reg3, reg4, immed, cond = self.decode_instruction(data, addr)
         if instr is None:
             return None
 
         result = InstructionInfo()
         result.length = length
+
+
+        if instr[0] == 'b' and instr != 'bsw' and instr != 'bsh':
+            branch_target = sign_extend(immed, 32) + addr
+            if instr == 'br':
+                result.add_branch(BranchType.UnconditionalBranch, branch_target)
+            else:
+                result.add_branch(BranchType.TrueBranch, branch_target)
+                result.add_branch(BranchType.FalseBranch, addr + length)
+
+        elif instr == 'jmp':
+            if dst_reg == Registers.index('lp'):
+                result.add_branch(BranchType.FunctionReturn)
+            else:
+                result.add_branch(BranchType.IndirectBranch)
+
+        elif instr == 'jarl':
+            branch_target = sign_extend(immed, 32) + addr
+            result.add_branch(BranchType.CallDestination, branch_target)
+
+        elif instr == 'jr':
+            branch_target = sign_extend(immed, 32) + addr
+            result.add_branch(BranchType.UnconditionalBranch, branch_target)
+
+        elif instr == 'dispose' and dst_reg != None:
+            result.add_branch(BranchType.FunctionReturn)
 
         return result
         # instr, _, _, _, _, _, length, src_value, _ = self.decode_instruction(data, addr)
@@ -557,7 +633,7 @@ class V850(Architecture):
         #
         # return result
 
-    def perform_get_instruction_text(self, data, addr):
+    def get_instruction_text(self, data, addr):
         instr, length, src_reg, dst_reg, reg3, reg4, immed, cond = self.decode_instruction(data, addr)
         if instr is None:
             return None
@@ -578,20 +654,19 @@ class V850(Architecture):
             tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[dst_reg])]
 
         if instr in RegImmediateInstructions and src_reg is None and dst_reg is not None and immed is not None:
-            # print("instr: ", instr, "immediate: ", immed, "register: ", Registers[dst_reg])
-            tokens += [InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(immed))]
+            tokens += [InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(immed), immed)]
             tokens += [InstructionTextToken(InstructionTextTokenType.TextToken, ', ')]
             tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[dst_reg])]
 
         if instr in ImmediateRegRegInstructions and src_reg is not None and dst_reg is not None and immed is not None:
-            tokens += [InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(immed))]
+            tokens += [InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(immed), immed)]
             tokens += [InstructionTextToken(InstructionTextTokenType.TextToken, ', ')]
             tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[src_reg])]
             tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ', ')]
             tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[dst_reg])]
 
         if instr in LoadInstructions:
-            tokens += [InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(immed))]
+            tokens += [InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(immed), immed)]
             tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, '[')]
             if src_reg is None:
                 tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, 'ep')]
@@ -603,7 +678,7 @@ class V850(Architecture):
         if instr in StoreInstructions:
             tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[src_reg])]
             tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ', ')]
-            tokens += [InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(immed))]
+            tokens += [InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(immed), immed)]
             tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, '[')]
             if dst_reg is None:
                 tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, 'ep')]
@@ -613,27 +688,25 @@ class V850(Architecture):
 
         if instr == 'jmp':
             if immed is not None:
-                tokens += [InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(immed))]
+                tokens += [InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(immed), immed)]
             tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, '[')]
             tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[dst_reg])]
             tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ']')]
 
         if instr == 'jr':
             branch_target = immed + addr
-            tokens += [InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(branch_target))]
+            tokens += [InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(branch_target), branch_target)]
 
         if instr == 'jarl':
             branch_target = immed + addr
-            tokens += [InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(branch_target))]
+            tokens += [InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(branch_target), branch_target)]
             tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ', ')]
             tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[dst_reg])]
 
         if instr[0] == 'b' and instr != 'bsw' and instr != 'bsh':
             # TODO - consider what the best place to fix up immediates is
-            print("printing instruction for", instr, "immed", immed, "addr", addr)
             branch_target = immed + addr
-            tokens += [InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(branch_target))]
-            # tokens += [InstructionTextToken(InstructionTextTokenType.TextToken, immed)]
+            tokens += [InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(branch_target), branch_target)]
 
         return tokens, length
         # (instr, width,
@@ -670,43 +743,87 @@ class V850(Architecture):
         #
         # return tokens, length
 
-    def perform_get_instruction_low_level_il(self, data, addr, il):
+    def get_instruction_low_level_il(self, data, addr, il):
         instr, length, src_reg, dst_reg, reg3, reg4, immed, cond = self.decode_instruction(data, addr)
         if instr is None:
             return None
 
-        il.append(il.unimplemented())
+        if instr in ['feret', 'eiret', 'ctret', 'reti']:
+            # TODO - use real jump targets
+            il.append(il.ret(il.reg(4, 'lp')))
+        elif instr == 'jmp' and dst_reg == Registers.index('lp'):
+            il.append(il.ret(il.reg(4, 'lp')))
+        elif instr == 'dispose' and dst_reg != None:
+            il.append(il.ret(to_il_src_reg(il, src_reg)))
+        elif instr == 'mov':
+            if src_reg != None:
+                il.append(il.set_reg(4, Registers[dst_reg], to_il_src_reg(il, src_reg)))
+            else:
+                il.append(il.set_reg(4, Registers[dst_reg], il.const(4, immed)))
+        elif instr == 'movhi' and dst_reg != None:
+            il.append(il.set_reg(4, Registers[dst_reg], il.add(4, to_il_src_reg(il, src_reg), il.shift_left(4, il.const(2, immed), il.const(1, 16)))))
+        elif instr in StoreInstructions:
+            if dst_reg == None:
+                dst_reg = Registers.index('ep')
+            il.append(il.store(StorageSize[instr.split('.')[1]],
+                il.add(4, to_il_src_reg(il, dst_reg), il.const(4, immed)),
+                to_il_src_reg(il, src_reg)))
+        elif instr in LoadInstructions:
+            if src_reg == None:
+                src_reg = Registers.index('ep')
+            if instr[-1] == 'u':
+                extend = il.zero_extend
+            else:
+                extend = il.sign_extend
+            il.append(il.set_reg(4, Registers[dst_reg],
+                extend(4, 
+                    il.load(StorageSize[instr.split('.')[1]],
+                    il.add(4, to_il_src_reg(il, src_reg), il.const(4, immed))))))
+        elif instr == 'movea':
+            il.append(il.set_reg(4, Registers[dst_reg],
+                il.add(4, to_il_src_reg(il, src_reg), il.const(4, immed))))
+        elif instr == 'jarl':
+            branch_target = sign_extend(immed, 32) + addr
+            il.append(il.call(il.const_pointer(4, branch_target)))
+        elif instr == 'jr':
+            branch_target = sign_extend(immed, 32) + addr
+            il.append(il.jump(il.const(4, branch_target)))
+        elif instr in ['add', 'addi']:
+            src = to_il_src_reg(il, src_reg) if immed is None else il.const(4, immed)
+            il.append(il.set_reg(4, Registers[dst_reg], il.add(4, src, to_il_src_reg(il, dst_reg))))
+        elif instr == 'cmp':
+            src = to_il_src_reg(il, src_reg) if immed is None else il.const(4, immed)
+            il.append(il.sub(4, to_il_src_reg(il, dst_reg), src, flags='*'))
+        elif instr == 'br':
+            branch_target = sign_extend(immed, 32) + addr
+            il.append(il.jump(il.const(4, branch_target)))
+        elif instr in BranchConditionCode:
+            branch_target = il.const(4, sign_extend(immed, 32) + addr)
+            cond = il.flag_condition(BranchConditionToILCondition[BranchConditionCode.index(instr)])
+            cond_branch(il, cond, branch_target)
+        elif instr in ['and', 'andi']:
+            src = to_il_src_reg(il, dst_reg) if immed is None else il.const(4, immed)
+            and_expr = il.and_expr(4, to_il_src_reg(il, src_reg), src)
+            il.append(il.set_reg(4, Registers[dst_reg], and_expr))
+        elif instr in ['or', 'ori']:
+            src = to_il_src_reg(il, dst_reg) if immed is None else il.const(4, immed)
+            and_expr = il.or_expr(4, to_il_src_reg(il, src_reg), src)
+            il.append(il.set_reg(4, Registers[dst_reg], and_expr))
+        elif instr == 'not':
+            il.append(il.set_reg(4, Registers[dst_reg], il.not_expr(4, to_il_src_reg(il, src_reg))))
+        elif instr == 'not':
+            il.append(il.nop())
+        else:
+            il.append(il.unimplemented())
         return length
-        # (instr, width,
-        #     src_operand, dst_operand,
-        #     src, dst, length,
-        #     src_value, dst_value) = self.decode_instruction(data, addr)
-        #
-        # if instr is None:
-        #     return None
-        #
-        # if InstructionIL.get(instr) is None:
-        #     log_error('[0x{:4x}]: {} not implemented'.format(addr, instr))
-        #     il.append(il.unimplemented())
-        # else:
-        #     il_instr = InstructionIL[instr](
-        #         il, src_operand, dst_operand, src, dst, width, src_value, dst_value
-        #     )
-        #     if isinstance(il_instr, list):
-        #         for i in [i for i in il_instr if i is not None]:
-        #             il.append(i)
-        #     elif il_instr is not None:
-        #         il.append(il_instr)
 
-        # return length
-
-# class DefaultCallingConvention(CallingConvention):
-#     int_arg_regs = ['r15', 'r14', 'r13', 'r12']
-#     int_return_reg = 'r15'
-#     high_int_return_reg = 'r14'
+class DefaultCallingConvention(CallingConvention):
+    int_arg_regs = ['r6', 'r7', 'r8', 'r9']
+    int_return_reg = 'r10'
+    # high_int_return_reg = 'r14'
 
 V850.register()
 arch = Architecture['V850']
-# arch.register_calling_convention(DefaultCallingConvention(arch, 'default'))
-# standalone = arch.standalone_platform
-# standalone.default_calling_convention = arch.calling_conventions['default']
+arch.register_calling_convention(DefaultCallingConvention(arch, 'default'))
+standalone = arch.standalone_platform
+standalone.default_calling_convention = arch.calling_conventions['default']
