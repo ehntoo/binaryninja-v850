@@ -611,6 +611,9 @@ class V850(Architecture):
         elif instr == 'dispose' and dst_reg != None:
             result.add_branch(BranchType.FunctionReturn)
 
+        elif instr == 'switch':
+            result.add_branch(BranchType.IndirectBranch)
+
         return result
         # instr, _, _, _, _, _, length, src_value, _ = self.decode_instruction(data, addr)
         #
@@ -748,12 +751,14 @@ class V850(Architecture):
         if instr is None:
             return None
 
-        if instr in ['feret', 'eiret', 'ctret', 'reti']:
+        if instr == 'nop':
+            il.append(il.nop())
+        elif instr in ['feret', 'eiret', 'ctret', 'reti']:
             # TODO - use real jump targets
             il.append(il.ret(il.reg(4, 'lp')))
         elif instr == 'jmp' and dst_reg == Registers.index('lp'):
             il.append(il.ret(il.reg(4, 'lp')))
-        elif instr == 'dispose' and dst_reg != None:
+        elif instr == 'dispose' and src_reg != None:
             il.append(il.ret(to_il_src_reg(il, src_reg)))
         elif instr == 'mov':
             if src_reg != None:
@@ -791,6 +796,8 @@ class V850(Architecture):
         elif instr in ['add', 'addi']:
             src = to_il_src_reg(il, src_reg) if immed is None else il.const(4, immed)
             il.append(il.set_reg(4, Registers[dst_reg], il.add(4, src, to_il_src_reg(il, dst_reg))))
+        elif instr in 'sub':
+            il.append(il.set_reg(4, Registers[dst_reg], il.sub(4, to_il_src_reg(il, dst_reg), to_il_src_reg(il, src_reg))))
         elif instr == 'cmp':
             src = to_il_src_reg(il, src_reg) if immed is None else il.const(4, immed)
             il.append(il.sub(4, to_il_src_reg(il, dst_reg), src, flags='*'))
@@ -807,12 +814,41 @@ class V850(Architecture):
             il.append(il.set_reg(4, Registers[dst_reg], and_expr))
         elif instr in ['or', 'ori']:
             src = to_il_src_reg(il, dst_reg) if immed is None else il.const(4, immed)
-            and_expr = il.or_expr(4, to_il_src_reg(il, src_reg), src)
-            il.append(il.set_reg(4, Registers[dst_reg], and_expr))
+            or_expr = il.or_expr(4, to_il_src_reg(il, src_reg), src)
+            il.append(il.set_reg(4, Registers[dst_reg], or_expr))
+        elif instr in ['xor', 'xori']:
+            src = to_il_src_reg(il, dst_reg) if immed is None else il.const(4, immed)
+            xor_expr = il.xor_expr(4, to_il_src_reg(il, src_reg), src)
+            il.append(il.set_reg(4, Registers[dst_reg], xor_expr))
         elif instr == 'not':
             il.append(il.set_reg(4, Registers[dst_reg], il.not_expr(4, to_il_src_reg(il, src_reg))))
-        elif instr == 'not':
-            il.append(il.nop())
+        elif instr == 'shr':
+            shiftee = to_il_src_reg(il, dst_reg)
+            shift_amount = il.const(4, immed) if immed is not None else to_il_src_reg(il, src_reg)
+            store_in = Registers[dst_reg] if reg3 is None else Registers[reg3]
+
+            shr_expr = il.logical_shift_right(4, shiftee, shift_amount)
+            il.append(il.set_reg(4, store_in, shr_expr))
+        elif instr == 'shl':
+            shiftee = to_il_src_reg(il, dst_reg)
+            shift_amount = il.const(4, immed) if immed is not None else to_il_src_reg(il, src_reg)
+            store_in = Registers[dst_reg] if reg3 is None else Registers[reg3]
+
+            shl_expr = il.shift_left(4, shiftee, shift_amount)
+            il.append(il.set_reg(4, store_in, shl_expr))
+        elif instr == 'sar':
+            shiftee = to_il_src_reg(il, dst_reg)
+            shift_amount = il.const(4, immed) if immed is not None else to_il_src_reg(il, src_reg)
+            store_in = Registers[dst_reg] if reg3 is None else Registers[reg3]
+
+            sar_expr = il.arith_shift_right(4, shiftee, shift_amount)
+            il.append(il.set_reg(4, store_in, sar_expr))
+        elif instr == 'cmov': #346e6
+            il.append(il.unimplemented())
+        elif instr == 'switch': #32c62
+            switch_addr = il.add(4, il.shift_left(4, il.reg(4, Registers[dst_reg]), il.const(1, 1)), il.const(4, il.current_address + 2))
+            new_pc = il.add(4, il.shift_left(4, il.sign_extend(4, il.load(2, switch_addr)), il.const(1, 1)), il.const(4, il.current_address + 2))
+            il.append(il.jump(new_pc))
         else:
             il.append(il.unimplemented())
         return length
