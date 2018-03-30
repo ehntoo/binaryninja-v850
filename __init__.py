@@ -486,9 +486,10 @@ class V850(Architecture):
     # The first flag write type is ignored currently.
     # See: https://github.com/Vector35/binaryninja-api/issues/513
     # flag_write_types = ['', '*', 'cnv', 'cnz']
-    flag_write_types = ['*']
+    flag_write_types = ['', '*', 'ovsz']
     flags_written_by_flag_write_type = {
         "*": ["cy", "z", "ov", "s"],
+        "ovsz": ["z", "ov", "s"],
     }
 
     def decode_instruction(self, data, addr):
@@ -613,6 +614,8 @@ class V850(Architecture):
 
         elif instr == 'switch':
             result.add_branch(BranchType.IndirectBranch)
+        elif instr in ['feret', 'eiret', 'ctret', 'reti']:
+            result.add_branch(BranchType.FunctionReturn)
 
         return result
         # instr, _, _, _, _, _, length, src_value, _ = self.decode_instruction(data, addr)
@@ -758,6 +761,8 @@ class V850(Architecture):
             il.append(il.ret(il.reg(4, 'lp')))
         elif instr == 'jmp' and dst_reg == Registers.index('lp'):
             il.append(il.ret(il.reg(4, 'lp')))
+        # elif instr == 'jmp':
+        #     il.append(il.jump(il.reg(4, Registers[dst_reg])))
         elif instr == 'dispose' and src_reg != None:
             il.append(il.ret(to_il_src_reg(il, src_reg)))
         elif instr == 'mov':
@@ -795,9 +800,11 @@ class V850(Architecture):
             il.append(il.jump(il.const(4, branch_target)))
         elif instr in ['add', 'addi']:
             src = to_il_src_reg(il, src_reg) if immed is None else il.const(4, immed)
-            il.append(il.set_reg(4, Registers[dst_reg], il.add(4, src, to_il_src_reg(il, dst_reg))))
-        elif instr in 'sub':
-            il.append(il.set_reg(4, Registers[dst_reg], il.sub(4, to_il_src_reg(il, dst_reg), to_il_src_reg(il, src_reg))))
+            il.append(il.set_reg(4, Registers[dst_reg], il.add(4, src, to_il_src_reg(il, dst_reg), flags='*')))
+        elif instr == 'sub':
+            il.append(il.set_reg(4, Registers[dst_reg], il.sub(4, to_il_src_reg(il, dst_reg), to_il_src_reg(il, src_reg), flags='*')))
+        elif instr == 'subr':
+            il.append(il.set_reg(4, Registers[dst_reg], il.sub(4, to_il_src_reg(il, src_reg), to_il_src_reg(il, dst_reg), flags='*')))
         elif instr == 'cmp':
             src = to_il_src_reg(il, src_reg) if immed is None else il.const(4, immed)
             il.append(il.sub(4, to_il_src_reg(il, dst_reg), src, flags='*'))
@@ -810,39 +817,59 @@ class V850(Architecture):
             cond_branch(il, cond, branch_target)
         elif instr in ['and', 'andi']:
             src = to_il_src_reg(il, dst_reg) if immed is None else il.const(4, immed)
-            and_expr = il.and_expr(4, to_il_src_reg(il, src_reg), src)
+            and_expr = il.and_expr(4, to_il_src_reg(il, src_reg), src, flags='ovsz')
             il.append(il.set_reg(4, Registers[dst_reg], and_expr))
+            il.append(il.set_flag('ov', il.const(0, 0)))
         elif instr in ['or', 'ori']:
             src = to_il_src_reg(il, dst_reg) if immed is None else il.const(4, immed)
-            or_expr = il.or_expr(4, to_il_src_reg(il, src_reg), src)
+            or_expr = il.or_expr(4, to_il_src_reg(il, src_reg), src, flags='ovsz')
             il.append(il.set_reg(4, Registers[dst_reg], or_expr))
+            il.append(il.set_flag('ov', il.const(0, 0)))
         elif instr in ['xor', 'xori']:
             src = to_il_src_reg(il, dst_reg) if immed is None else il.const(4, immed)
-            xor_expr = il.xor_expr(4, to_il_src_reg(il, src_reg), src)
+            xor_expr = il.xor_expr(4, to_il_src_reg(il, src_reg), src, flags='ovsz')
             il.append(il.set_reg(4, Registers[dst_reg], xor_expr))
+            il.append(il.set_flag('ov', il.const(0, 0)))
         elif instr == 'not':
-            il.append(il.set_reg(4, Registers[dst_reg], il.not_expr(4, to_il_src_reg(il, src_reg))))
+            il.append(il.set_reg(4, Registers[dst_reg], il.not_expr(4, to_il_src_reg(il, src_reg), flags='ovsz')))
+            il.append(il.set_flag('ov', il.const(0, 0)))
         elif instr == 'shr':
             shiftee = to_il_src_reg(il, dst_reg)
             shift_amount = il.const(4, immed) if immed is not None else to_il_src_reg(il, src_reg)
             store_in = Registers[dst_reg] if reg3 is None else Registers[reg3]
 
-            shr_expr = il.logical_shift_right(4, shiftee, shift_amount)
+            shr_expr = il.logical_shift_right(4, shiftee, shift_amount, flags='*')
             il.append(il.set_reg(4, store_in, shr_expr))
+            il.append(il.set_flag('cy',
+                il.and_expr(1,
+                    il.const(1, 1),
+                    il.logical_shift_right(4, shiftee, il.sub(4, shift_amount, il.const(1, 1))))))
+            il.append(il.set_flag('ov', il.const(0, 0)))
         elif instr == 'shl':
             shiftee = to_il_src_reg(il, dst_reg)
             shift_amount = il.const(4, immed) if immed is not None else to_il_src_reg(il, src_reg)
             store_in = Registers[dst_reg] if reg3 is None else Registers[reg3]
 
-            shl_expr = il.shift_left(4, shiftee, shift_amount)
+            shl_expr = il.shift_left(4, shiftee, shift_amount, flags='*')
             il.append(il.set_reg(4, store_in, shl_expr))
+            # TODO - find a better way of doing this?
+            # il.append(il.set_flag('cy',
+            #     il.and_expr(1,
+            #         il.const(4, 0x80000000),
+            #         il.shift_left(4, shiftee, il.sub(4, shift_amount, il.const(1, 1))))))
+            # il.append(il.set_flag('ov', il.const(0, 0)))
         elif instr == 'sar':
             shiftee = to_il_src_reg(il, dst_reg)
             shift_amount = il.const(4, immed) if immed is not None else to_il_src_reg(il, src_reg)
             store_in = Registers[dst_reg] if reg3 is None else Registers[reg3]
 
-            sar_expr = il.arith_shift_right(4, shiftee, shift_amount)
+            sar_expr = il.arith_shift_right(4, shiftee, shift_amount, flags='*')
             il.append(il.set_reg(4, store_in, sar_expr))
+            il.append(il.set_flag('cy',
+                il.and_expr(1,
+                    il.const(1, 1),
+                    il.logical_shift_right(4, shiftee, il.sub(4, shift_amount, il.const(1, 1))))))
+            il.append(il.set_flag('ov', il.const(0, 0)))
         elif instr == 'cmov': #346e6
             il.append(il.unimplemented())
         elif instr == 'switch': #32c62
