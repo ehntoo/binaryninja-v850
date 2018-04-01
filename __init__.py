@@ -390,11 +390,14 @@ BranchConditionToILCondition = [
 
 StorageSize = {'b': 1, 'h': 2, 'w': 4, 'bu': 1, 'hu': 2}
 
-def to_il_src_reg(il, reg):
-    return il.reg(4, Registers[reg]) if reg != 0 else il.const(0, 0)
+def to_il_src_reg(il, reg, width=4):
+    return il.reg(width, Registers[reg]) if reg != 0 else il.const(0, 0)
 
 def to_il_dst_reg(il, reg):
     return il.reg(4, Registers[reg]) if reg != 0 else il.undefined()
+
+def to_il_set_reg(il, reg, val):
+    return il.set_reg(4, reg, val) if reg != 'r0' else val
 
 def cond_branch(il, cond, dest):
     t = None
@@ -508,6 +511,8 @@ class V850(Architecture):
 
         if opcode in TypeOneRegRegInstructions:
             instr, src, dst = TypeOneRegRegInstructions[opcode](reg1, reg2)
+            if instr == 'mov' and reg2 is None:
+                return error_value
             return (instr, 2, src, dst, None, None, None, None)
 
         if opcode in TypeOneImmediateRegInstructions:
@@ -596,9 +601,9 @@ class V850(Architecture):
                 result.add_branch(BranchType.FalseBranch, addr + length)
 
         elif instr == 'jmp':
-            if dst_reg == Registers.index('lp'):
-                result.add_branch(BranchType.FunctionReturn)
-            else:
+            # if dst_reg == Registers.index('lp'):
+            #     result.add_branch(BranchType.FunctionReturn)
+            # else:
                 result.add_branch(BranchType.IndirectBranch)
 
         elif instr == 'jarl':
@@ -759,10 +764,10 @@ class V850(Architecture):
         elif instr in ['feret', 'eiret', 'ctret', 'reti']:
             # TODO - use real jump targets
             il.append(il.ret(il.reg(4, 'lp')))
-        elif instr == 'jmp' and dst_reg == Registers.index('lp'):
-            il.append(il.ret(il.reg(4, 'lp')))
-        # elif instr == 'jmp':
-        #     il.append(il.jump(il.reg(4, Registers[dst_reg])))
+        # elif instr == 'jmp' and dst_reg == Registers.index('lp'):
+        #     il.append(il.ret(il.reg(4, 'lp')))
+        elif instr == 'jmp':
+            il.append(il.jump(il.reg(4, Registers[dst_reg])))
         elif instr == 'dispose' and src_reg != None:
             il.append(il.ret(to_il_src_reg(il, src_reg)))
         elif instr == 'mov':
@@ -786,7 +791,7 @@ class V850(Architecture):
             else:
                 extend = il.sign_extend
             il.append(il.set_reg(4, Registers[dst_reg],
-                extend(4, 
+                extend(4,
                     il.load(StorageSize[instr.split('.')[1]],
                     il.add(4, to_il_src_reg(il, src_reg), il.const(4, immed))))))
         elif instr == 'movea':
@@ -798,9 +803,24 @@ class V850(Architecture):
         elif instr == 'jr':
             branch_target = sign_extend(immed, 32) + addr
             il.append(il.jump(il.const(4, branch_target)))
-        elif instr in ['add', 'addi']:
+        elif instr == 'add':
             src = to_il_src_reg(il, src_reg) if immed is None else il.const(4, immed)
             il.append(il.set_reg(4, Registers[dst_reg], il.add(4, src, to_il_src_reg(il, dst_reg), flags='*')))
+        elif instr == 'addi':
+            op1 = to_il_src_reg(il, src_reg)
+            op2 = il.const(4, immed)
+            # il.append(il.set_reg(4, Registers[dst_reg], il.add(4, op1, op2, flags='*')))
+            # il.append(il.set_reg(4, Registers[dst_reg], il.add(4, op2, op1, flags='*')))
+            # il.append(il.set_flag('z', il.compare_equal(4, il.reg(4, 'r0'), il.const(0, 0))))
+            # il.append(to_il_set_reg(il, Registers[dst_reg], il.add(4, op2, op1, flags='*')))
+            # this is absolutely not strictly correct
+            # il.append(to_il_set_reg(il, Registers[dst_reg], il.sub(4, op1, il.mult(4, op2, il.const(1, -1)), flags='*')))
+            # il.append(to_il_set_reg(il, Registers[dst_reg], il.sub(4, op1, il.const(5, -1 * immed), flags='*')))
+            if dst_reg == 0:
+                # todo - this is a  massive hack to get flags set correctly while still allowing me to be lazy
+                il.append(to_il_set_reg(il, Registers[dst_reg], il.sub(4, il.const(5, (-1 * immed) - 1), op1, flags='*')))
+            else:
+                il.append(to_il_set_reg(il, Registers[dst_reg], il.add(4, op2, op1, flags='*')))
         elif instr == 'sub':
             il.append(il.set_reg(4, Registers[dst_reg], il.sub(4, to_il_src_reg(il, dst_reg), to_il_src_reg(il, src_reg), flags='*')))
         elif instr == 'subr':
@@ -876,6 +896,14 @@ class V850(Architecture):
             switch_addr = il.add(4, il.shift_left(4, il.reg(4, Registers[dst_reg]), il.const(1, 1)), il.const(4, il.current_address + 2))
             new_pc = il.add(4, il.shift_left(4, il.sign_extend(4, il.load(2, switch_addr)), il.const(1, 1)), il.const(4, il.current_address + 2))
             il.append(il.jump(new_pc))
+        elif instr == 'zxb':
+            il.append(il.set_reg(4, Registers[dst_reg], il.zero_extend(4, to_il_src_reg(il, dst_reg, 1))))
+        elif instr == 'zxh':
+            il.append(il.set_reg(4, Registers[dst_reg], il.zero_extend(4, to_il_src_reg(il, dst_reg, 2))))
+        elif instr == 'sxb':
+            il.append(il.set_reg(4, Registers[dst_reg], il.sign_extend(4, to_il_src_reg(il, dst_reg, 1))))
+        elif instr == 'sxh':
+            il.append(il.set_reg(4, Registers[dst_reg], il.sign_extend(4, to_il_src_reg(il, dst_reg, 2))))
         else:
             il.append(il.unimplemented())
         return length
