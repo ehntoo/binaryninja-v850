@@ -111,7 +111,6 @@ StoreInstructions = [
 ]
 
 # TODO: instructions with conditions: ADF, SBF, SETF, B, CMOV, SASF
-# TODO: Instructions with PC-relative immediates: JARL, JR, B (done!) - also loads and stores
 
 TypeOneRegRegInstructions = {
     0x00: lambda reg1, reg2: ('mov', reg1, reg2),
@@ -166,6 +165,7 @@ class Register_List_Bits (ctypes.LittleEndianStructure):
         ('r22', ctypes.c_uint16, 1),
         ('r21', ctypes.c_uint16, 1),
         ('r20', ctypes.c_uint16, 1),
+        ('r27', ctypes.c_uint16, 1),
         ('r26', ctypes.c_uint16, 1),
         ('r25', ctypes.c_uint16, 1),
         ('r24', ctypes.c_uint16, 1),
@@ -582,6 +582,9 @@ class V850(Architecture):
 
         # return instr, length, src_reg, dst_reg, reg3, reg4, immed, cond
         return error_value
+    # def _get_link_register(self, ctxt):
+    #     print(ctxt)
+    #     return Registers.index('lp')
 
     def get_instruction_info(self, data, addr):
         instr, length, src_reg, dst_reg, reg3, reg4, immed, cond = self.decode_instruction(data, addr)
@@ -651,7 +654,7 @@ class V850(Architecture):
 
         instruction_text = instr
         tokens = [
-            InstructionTextToken(InstructionTextTokenType.TextToken, '{:7s}'.format(instruction_text))
+            InstructionTextToken(InstructionTextTokenType.TextToken, '{:8s}'.format(instruction_text))
         ]
 
         # if instr in NoRegisterInstructions.values():
@@ -719,64 +722,104 @@ class V850(Architecture):
             branch_target = immed + addr
             tokens += [InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(branch_target), branch_target)]
 
+        if instr == 'prepare':
+            registers = sorted(dst_reg.bit._fields_, key = lambda tup: tup[0])
+            tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, '{')]
+            handled_a_register = False
+            for r in registers:
+                regname = r[0]
+                printable_regname = regname
+                if regname == 'r30': printable_regname = 'ep'
+                if regname == 'r31': printable_regname = 'lp'
+                if getattr(dst_reg.bit, regname):
+                    handled_a_register = True
+                    tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, printable_regname)]
+                    tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ', ')]
+            if handled_a_register: tokens.pop()
+            tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, '}, ')]
+            tokens += [InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(immed), immed)]
+            if src_reg != None:
+                tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ', ')]
+                if length == 4:
+                    tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[src_reg])]
+                else:
+                    tokens += [InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(src_reg))]
+
+        if instr == 'dispose':
+            tokens += [InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(immed), immed)]
+            tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ', {')]
+
+            registers = sorted(dst_reg.bit._fields_, key = lambda tup: tup[0])
+            handled_a_register = False
+            for r in registers:
+                regname = r[0]
+                printable_regname = regname
+                if regname == 'r30': printable_regname = 'ep'
+                if regname == 'r31': printable_regname = 'lp'
+                if getattr(dst_reg.bit, regname):
+                    handled_a_register = True
+                    tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, printable_regname)]
+                    tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ', ')]
+            if handled_a_register: tokens.pop()
+            tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, '}')]
+            if src_reg != None:
+                tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ', ')]
+                tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[src_reg])]
+
         return tokens, length
-        # (instr, width,
-        #  src_operand, dst_operand,
-        #  src, dst, length,
-        #  src_value, dst_value) = self.decode_instruction(data, addr)
-        #
-        # if instr is None:
-        #     return None
-        #
-        # tokens = []
-        #
-        # instruction_text = instr
-        #
-        # if width == 1:
-        #     instruction_text += '.b'
-        #
-        # tokens = [
-        #     InstructionTextToken(InstructionTextTokenType.TextToken, '{:7s}'.format(instruction_text))
-        # ]
-        #
-        # if instr in TYPE1_INSTRUCTIONS:
-        #     tokens += OperandTokens[src_operand](src, src_value)
-        #
-        #     tokens += [InstructionTextToken(InstructionTextTokenType.TextToken, ',')]
-        #
-        #     tokens += OperandTokens[dst_operand](dst, dst_value)
-        #
-        # elif instr in TYPE2_INSTRUCTIONS:
-        #     tokens += OperandTokens[src_operand](src, src_value)
-        #
-        # elif instr in TYPE3_INSTRUCTIONS:
-        #     tokens += OperandTokens[src_operand](src, src_value)
-        #
-        # return tokens, length
 
     def get_instruction_low_level_il(self, data, addr, il):
         instr, length, src_reg, dst_reg, reg3, reg4, immed, cond = self.decode_instruction(data, addr)
         if instr is None:
             return None
 
-        if instr == 'nop':
+        if instr in ['nop', 'synce', 'syncm', 'syncp']:
+            # TODO - something better we can emit for sync instructions?
             il.append(il.nop())
         elif instr in ['feret', 'eiret', 'ctret', 'reti']:
-            # TODO - use real jump targets
+            # TODO - use real jump targets (if possible?)
             il.append(il.ret(il.reg(4, 'lp')))
-        # elif instr == 'jmp' and dst_reg == Registers.index('lp'):
-        #     il.append(il.ret(il.reg(4, 'lp')))
         elif instr == 'jmp':
             il.append(il.jump(il.reg(4, Registers[dst_reg])))
-        elif instr == 'dispose' and src_reg != None:
-            il.append(il.ret(to_il_src_reg(il, src_reg)))
+            # il.append(il.ret(il.reg(4, Registers[dst_reg])))
+        # elif instr == 'dispose' and src_reg != None:
+        #     il.append(il.ret(to_il_src_reg(il, src_reg)))
+        elif instr == 'dispose':
+            if immed > 0:
+                il.append(il.set_reg(4, 'sp', il.add(4, il.reg(4, 'sp'), il.const(4, immed))))
+            registers = sorted(dst_reg.bit._fields_, key = lambda tup: tup[0], reverse = True)
+            for r in registers:
+                regname = r[0]
+                printable_regname = regname
+                if regname == 'r30': printable_regname = 'ep'
+                if regname == 'r31': printable_regname = 'lp'
+                if getattr(dst_reg.bit, regname):
+                    il.append(il.set_reg(4, printable_regname, il.pop(4)))
+            if src_reg != None:
+                il.append(il.ret(to_il_src_reg(il, src_reg)))
+        elif instr == 'prepare':
+            registers = sorted(dst_reg.bit._fields_, key = lambda tup: tup[0])
+            for r in registers:
+                regname = r[0]
+                printable_regname = regname
+                if regname == 'r30': printable_regname = 'ep'
+                if regname == 'r31': printable_regname = 'lp'
+                if getattr(dst_reg.bit, regname):
+                    il.append(il.push(4, il.reg(4, printable_regname)))
+            if immed > 0:
+                il.append(il.set_reg(4, 'sp', il.sub(4, il.reg(4, 'sp'), il.const(4, immed))))
+            if src_reg != None:
+                if length == 4:
+                    il.append(il.set_reg(4, 'ep', to_il_src_reg(il, src_reg)))
+                else:
+                    il.append(il.set_reg(4, 'ep', il.const(4, src_reg)))
         elif instr == 'mov':
             if src_reg != None:
-                il.append(il.set_reg(4, Registers[dst_reg], to_il_src_reg(il, src_reg)))
+                il.append(to_il_set_reg(il, Registers[dst_reg], to_il_src_reg(il, src_reg)))
             else:
-                il.append(il.set_reg(4, Registers[dst_reg], il.const(4, immed)))
+                il.append(to_il_set_reg(il, Registers[dst_reg], il.const(4, immed)))
         elif instr == 'movhi' and dst_reg != None:
-            il.append(il.set_reg(4, Registers[dst_reg], il.add(4, to_il_src_reg(il, src_reg), il.shift_left(4, il.const(2, immed), il.const(1, 16)))))
+            il.append(to_il_set_reg(il, Registers[dst_reg], il.add(4, to_il_src_reg(il, src_reg), il.shift_left(4, il.const(2, immed), il.const(1, 16)))))
         elif instr in StoreInstructions:
             if dst_reg == None:
                 dst_reg = Registers.index('ep')
@@ -790,41 +833,40 @@ class V850(Architecture):
                 extend = il.zero_extend
             else:
                 extend = il.sign_extend
-            il.append(il.set_reg(4, Registers[dst_reg],
+            il.append(to_il_set_reg(il, Registers[dst_reg],
                 extend(4,
                     il.load(StorageSize[instr.split('.')[1]],
                     il.add(4, to_il_src_reg(il, src_reg), il.const(4, immed))))))
         elif instr == 'movea':
-            il.append(il.set_reg(4, Registers[dst_reg],
+            il.append(to_il_set_reg(il, Registers[dst_reg],
                 il.add(4, to_il_src_reg(il, src_reg), il.const(4, immed))))
         elif instr == 'jarl':
             branch_target = sign_extend(immed, 32) + addr
+            # il.append(il.ret(il.const_pointer(4, branch_target)))
             il.append(il.call(il.const_pointer(4, branch_target)))
+            # if dst_reg != Registers.index('lp'):
+            #     il.append(il.set_reg(4, Registers[dst_reg], il.const(4, addr + length)))
+            # il.append(il.set_reg(4, Registers[dst_reg], il.const(4, addr + length)))
+            # il.append(il.jump(il.const_pointer(4, branch_target)))
         elif instr == 'jr':
             branch_target = sign_extend(immed, 32) + addr
             il.append(il.jump(il.const(4, branch_target)))
         elif instr == 'add':
             src = to_il_src_reg(il, src_reg) if immed is None else il.const(4, immed)
-            il.append(il.set_reg(4, Registers[dst_reg], il.add(4, src, to_il_src_reg(il, dst_reg), flags='*')))
+            il.append(to_il_set_reg(il, Registers[dst_reg], il.add(4, src, to_il_src_reg(il, dst_reg), flags='*')))
         elif instr == 'addi':
             op1 = to_il_src_reg(il, src_reg)
             op2 = il.const(4, immed)
-            # il.append(il.set_reg(4, Registers[dst_reg], il.add(4, op1, op2, flags='*')))
-            # il.append(il.set_reg(4, Registers[dst_reg], il.add(4, op2, op1, flags='*')))
-            # il.append(il.set_flag('z', il.compare_equal(4, il.reg(4, 'r0'), il.const(0, 0))))
-            # il.append(to_il_set_reg(il, Registers[dst_reg], il.add(4, op2, op1, flags='*')))
-            # this is absolutely not strictly correct
-            # il.append(to_il_set_reg(il, Registers[dst_reg], il.sub(4, op1, il.mult(4, op2, il.const(1, -1)), flags='*')))
-            # il.append(to_il_set_reg(il, Registers[dst_reg], il.sub(4, op1, il.const(5, -1 * immed), flags='*')))
-            if dst_reg == 0:
-                # todo - this is a  massive hack to get flags set correctly while still allowing me to be lazy
-                il.append(to_il_set_reg(il, Registers[dst_reg], il.sub(4, il.const(5, (-1 * immed) - 1), op1, flags='*')))
-            else:
-                il.append(to_il_set_reg(il, Registers[dst_reg], il.add(4, op2, op1, flags='*')))
+            # if dst_reg == 0:
+            #     # TODO - this is a  massive hack to get flags set correctly while still allowing me to be lazy
+            #     il.append(to_il_set_reg(il, Registers[dst_reg], il.sub(4, il.const(5, (-1 * immed) - 1), op1, flags='*')))
+            # else:
+            #     il.append(to_il_set_reg(il, Registers[dst_reg], il.add(4, op2, op1, flags='*')))
+            il.append(to_il_set_reg(il, Registers[dst_reg], il.add(4, op2, op1, flags='*')))
         elif instr == 'sub':
-            il.append(il.set_reg(4, Registers[dst_reg], il.sub(4, to_il_src_reg(il, dst_reg), to_il_src_reg(il, src_reg), flags='*')))
+            il.append(to_il_set_reg(il, Registers[dst_reg], il.sub(4, to_il_src_reg(il, dst_reg), to_il_src_reg(il, src_reg), flags='*')))
         elif instr == 'subr':
-            il.append(il.set_reg(4, Registers[dst_reg], il.sub(4, to_il_src_reg(il, src_reg), to_il_src_reg(il, dst_reg), flags='*')))
+            il.append(to_il_set_reg(il, Registers[dst_reg], il.sub(4, to_il_src_reg(il, src_reg), to_il_src_reg(il, dst_reg), flags='*')))
         elif instr == 'cmp':
             src = to_il_src_reg(il, src_reg) if immed is None else il.const(4, immed)
             il.append(il.sub(4, to_il_src_reg(il, dst_reg), src, flags='*'))
@@ -838,20 +880,20 @@ class V850(Architecture):
         elif instr in ['and', 'andi']:
             src = to_il_src_reg(il, dst_reg) if immed is None else il.const(4, immed)
             and_expr = il.and_expr(4, to_il_src_reg(il, src_reg), src, flags='ovsz')
-            il.append(il.set_reg(4, Registers[dst_reg], and_expr))
+            il.append(to_il_set_reg(il, Registers[dst_reg], and_expr))
             il.append(il.set_flag('ov', il.const(0, 0)))
         elif instr in ['or', 'ori']:
             src = to_il_src_reg(il, dst_reg) if immed is None else il.const(4, immed)
             or_expr = il.or_expr(4, to_il_src_reg(il, src_reg), src, flags='ovsz')
-            il.append(il.set_reg(4, Registers[dst_reg], or_expr))
+            il.append(to_il_set_reg(il, Registers[dst_reg], or_expr))
             il.append(il.set_flag('ov', il.const(0, 0)))
         elif instr in ['xor', 'xori']:
             src = to_il_src_reg(il, dst_reg) if immed is None else il.const(4, immed)
             xor_expr = il.xor_expr(4, to_il_src_reg(il, src_reg), src, flags='ovsz')
-            il.append(il.set_reg(4, Registers[dst_reg], xor_expr))
+            il.append(to_il_set_reg(il, Registers[dst_reg], xor_expr))
             il.append(il.set_flag('ov', il.const(0, 0)))
         elif instr == 'not':
-            il.append(il.set_reg(4, Registers[dst_reg], il.not_expr(4, to_il_src_reg(il, src_reg), flags='ovsz')))
+            il.append(to_il_set_reg(il, Registers[dst_reg], il.not_expr(4, to_il_src_reg(il, src_reg), flags='ovsz')))
             il.append(il.set_flag('ov', il.const(0, 0)))
         elif instr == 'shr':
             shiftee = to_il_src_reg(il, dst_reg)
@@ -859,7 +901,8 @@ class V850(Architecture):
             store_in = Registers[dst_reg] if reg3 is None else Registers[reg3]
 
             shr_expr = il.logical_shift_right(4, shiftee, shift_amount, flags='*')
-            il.append(il.set_reg(4, store_in, shr_expr))
+            il.append(to_il_set_reg(il, store_in, shr_expr))
+            # TODO - find a better way of doing this? it falls over if shift amount is 0
             il.append(il.set_flag('cy',
                 il.and_expr(1,
                     il.const(1, 1),
@@ -871,39 +914,41 @@ class V850(Architecture):
             store_in = Registers[dst_reg] if reg3 is None else Registers[reg3]
 
             shl_expr = il.shift_left(4, shiftee, shift_amount, flags='*')
-            il.append(il.set_reg(4, store_in, shl_expr))
-            # TODO - find a better way of doing this?
-            # il.append(il.set_flag('cy',
-            #     il.and_expr(1,
-            #         il.const(4, 0x80000000),
-            #         il.shift_left(4, shiftee, il.sub(4, shift_amount, il.const(1, 1))))))
-            # il.append(il.set_flag('ov', il.const(0, 0)))
+            il.append(to_il_set_reg(il, store_in, shl_expr))
+            # TODO - find a better way of doing this? it falls over if shift amount is 0
+            il.append(il.set_flag('cy',
+                il.and_expr(1,
+                    il.const(4, 0x80000000),
+                    il.shift_left(4, shiftee, il.sub(4, shift_amount, il.const(1, 1))))))
+            il.append(il.set_flag('ov', il.const(0, 0)))
         elif instr == 'sar':
             shiftee = to_il_src_reg(il, dst_reg)
             shift_amount = il.const(4, immed) if immed is not None else to_il_src_reg(il, src_reg)
             store_in = Registers[dst_reg] if reg3 is None else Registers[reg3]
 
             sar_expr = il.arith_shift_right(4, shiftee, shift_amount, flags='*')
-            il.append(il.set_reg(4, store_in, sar_expr))
+            il.append(to_il_set_reg(il, store_in, sar_expr))
+            # TODO - find a better way of doing this? it falls over if shift amount is 0
             il.append(il.set_flag('cy',
                 il.and_expr(1,
                     il.const(1, 1),
                     il.logical_shift_right(4, shiftee, il.sub(4, shift_amount, il.const(1, 1))))))
             il.append(il.set_flag('ov', il.const(0, 0)))
-        elif instr == 'cmov': #346e6
-            il.append(il.unimplemented())
-        elif instr == 'switch': #32c62
-            switch_addr = il.add(4, il.shift_left(4, il.reg(4, Registers[dst_reg]), il.const(1, 1)), il.const(4, il.current_address + 2))
-            new_pc = il.add(4, il.shift_left(4, il.sign_extend(4, il.load(2, switch_addr)), il.const(1, 1)), il.const(4, il.current_address + 2))
+        elif instr == 'switch':
+            pc_plus_two = il.const(4, il.current_address + 2)
+            switch_addr = il.add(4, il.shift_left(4, il.reg(4, Registers[dst_reg]), il.const(1, 1)), pc_plus_two)
+            new_pc = il.add(4, il.shift_left(4, il.sign_extend(4, il.load(2, switch_addr)), il.const(1, 1)), pc_plus_two)
             il.append(il.jump(new_pc))
         elif instr == 'zxb':
-            il.append(il.set_reg(4, Registers[dst_reg], il.zero_extend(4, to_il_src_reg(il, dst_reg, 1))))
+            il.append(to_il_set_reg(il, Registers[dst_reg], il.zero_extend(4, to_il_src_reg(il, dst_reg, 1))))
         elif instr == 'zxh':
-            il.append(il.set_reg(4, Registers[dst_reg], il.zero_extend(4, to_il_src_reg(il, dst_reg, 2))))
+            il.append(to_il_set_reg(il, Registers[dst_reg], il.zero_extend(4, to_il_src_reg(il, dst_reg, 2))))
         elif instr == 'sxb':
-            il.append(il.set_reg(4, Registers[dst_reg], il.sign_extend(4, to_il_src_reg(il, dst_reg, 1))))
+            il.append(to_il_set_reg(il, Registers[dst_reg], il.sign_extend(4, to_il_src_reg(il, dst_reg, 1))))
         elif instr == 'sxh':
-            il.append(il.set_reg(4, Registers[dst_reg], il.sign_extend(4, to_il_src_reg(il, dst_reg, 2))))
+            il.append(to_il_set_reg(il, Registers[dst_reg], il.sign_extend(4, to_il_src_reg(il, dst_reg, 2))))
+        elif instr == 'cmov':
+            il.append(il.unimplemented())
         else:
             il.append(il.unimplemented())
         return length
