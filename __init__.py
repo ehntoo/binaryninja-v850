@@ -254,7 +254,7 @@ SimpleThirtyTwoBitInstructions = {
     0x34: lambda reg1, reg2, _, i2, _2: ('ori', 4, reg1, reg2, i2),
     0x35: lambda reg1, reg2, _, i2, _2: ('xori', 4, reg1, reg2, i2),
     0x36: lambda reg1, reg2, _, i2, _2: ('andi', 4, reg1, reg2, i2),
-    0x37: lambda reg1, reg2, _, i2, i3: ('mulhi', 4, reg1, reg2, i2) if reg2 != 0 else ('jmp', 6, None, reg1, (i3 << 16) | i2),
+    0x37: lambda reg1, reg2, _, i2, i3: ('mulhi', 4, reg1, reg2, sign_extend(i2, 16)) if reg2 != 0 else ('jmp', 6, None, reg1, (i3 << 16) | i2),
     0x38: lambda reg1, reg2, _, i2, _2: ('ld.b', 4, reg1, reg2, sign_extend(i2, 16)),
     0x39: lambda reg1, reg2, _, i2, _2: ('ld.h', 4, reg1, reg2, sign_extend(i2, 16)) if i2 & 0x1 == 0 else ('ld.w', 4, reg1, reg2, sign_extend(i2 & 0xfffe, 16)),
     0x3a: lambda reg1, reg2, _, i2, _2: ('st.b', 4, reg2, reg1, sign_extend(i2, 16)),
@@ -298,26 +298,26 @@ ExtendedInstructions = {
         0x2: lambda reg1, reg2, _, i2: ('mulu', 4, reg1, reg2, i2 >> 11, None, None, None),
     }),
     0x12: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
-        0x0: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
-        0x4: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
-        0x8: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
-        0xc: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
-        0x10: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
-        0x14: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
-        0x18: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
-        0x1c: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
-        0x2: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
-        0x6: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
-        0xa: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
-        0xe: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
-        0x12: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
-        0x16: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
-        0x1a: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
-        0x1e: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+        0x0: lambda reg1, reg2, _, i2: ('mul', 4, None, reg2, i2 >> 11, None, sign_extend(reg1 | ((i2 & 0x3f) << 3), 9), None),
+        0x4: lambda reg1, reg2, _, i2: ('mul', 4, None, reg2, i2 >> 11, None, sign_extend(reg1 | ((i2 & 0x3f) << 3), 9), None),
+        0x8: lambda reg1, reg2, _, i2: ('mul', 4, None, reg2, i2 >> 11, None, sign_extend(reg1 | ((i2 & 0x3f) << 3), 9), None),
+        0xc: lambda reg1, reg2, _, i2: ('mul', 4, None, reg2, i2 >> 11, None, sign_extend(reg1 | ((i2 & 0x3f) << 3), 9), None),
+        0x10: lambda reg1, reg2, _, i2: ('mul', 4, None, reg2, i2 >> 11, None, sign_extend(reg1 | ((i2 & 0x3f) << 3), 9), None),
+        0x14: lambda reg1, reg2, _, i2: ('mul', 4, None, reg2, i2 >> 11, None, sign_extend(reg1 | ((i2 & 0x3f) << 3), 9), None),
+        0x18: lambda reg1, reg2, _, i2: ('mul', 4, None, reg2, i2 >> 11, None, sign_extend(reg1 | ((i2 & 0x3f) << 3), 9), None),
+        0x1c: lambda reg1, reg2, _, i2: ('mul', 4, None, reg2, i2 >> 11, None, sign_extend(reg1 | ((i2 & 0x3f) << 3), 9), None),
+        0x2: lambda reg1, reg2, _, i2: ('mulu', 4, None, reg2, i2 >> 11, None, reg1 | ((i2 & 0x3d) << 3), None),
+        0x6: lambda reg1, reg2, _, i2: ('mulu', 4, None, reg2, i2 >> 11, None, reg1 | ((i2 & 0x3d) << 3), None),
+        0xa: lambda reg1, reg2, _, i2: ('mulu', 4, None, reg2, i2 >> 11, None, reg1 | ((i2 & 0x3d) << 3), None),
+        0xe: lambda reg1, reg2, _, i2: ('mulu', 4, None, reg2, i2 >> 11, None, reg1 | ((i2 & 0x3d) << 3), None),
+        0x12: lambda reg1, reg2, _, i2: ('mulu', 4, None, reg2, i2 >> 11, None, reg1 | ((i2 & 0x3d) << 3), None),
+        0x16: lambda reg1, reg2, _, i2: ('mulu', 4, None, reg2, i2 >> 11, None, reg1 | ((i2 & 0x3d) << 3), None),
+        0x1a: lambda reg1, reg2, _, i2: ('mulu', 4, None, reg2, i2 >> 11, None, reg1 | ((i2 & 0x3d) << 3), None),
+        0x1e: lambda reg1, reg2, _, i2: ('mulu', 4, None, reg2, i2 >> 11, None, reg1 | ((i2 & 0x3d) << 3), None),
     }),
     0x13: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
-        0x0: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
-        0x2: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3f) << 3), None),
+        0x0: lambda reg1, reg2, _, i2: ('mul', 4, reg2, i2 >> 11, None, None, sign_extend(reg1 | ((i2 & 0x3f) << 3), 9), None),
+        0x2: lambda reg1, reg2, _, i2: ('mulu', 4, reg2, i2 >> 11, None, None, reg1 | ((i2 & 0x3d) << 3), None),
     }),
     0x14: defaultdict(lambda: lambda r1, r2, i1, i2: (None, None, None, None, None, None, None, None), {
         0x0: lambda reg1, reg2, _, i2: ('divh', 4, reg1, reg2, i2 >> 11, None, None, None),
@@ -524,9 +524,9 @@ class V850(Architecture):
             if reg1 == reg2 == 0:
                 return 'jr', 6, None, None, None, None, (struct.unpack('<H', data[4:6])[0] << 16) | struct.unpack('<H', data[2:4])[0], None
             if reg2 == 0:
-                return 'jarl', 6, None, reg1, None, None, sign_extend((struct.unpack('<H', data[4:6])[0] << 16) | struct.unpack('<H', data[2:4])[0], 32), None 
+                return 'jarl', 6, None, reg1, None, None, sign_extend((struct.unpack('<H', data[4:6])[0] << 16) | struct.unpack('<H', data[2:4])[0], 32), None
             else:
-                return 'mulh', 2, None, reg2, None, None, reg1, None
+                return 'mulh', 2, None, reg2, None, None, sign_extend(reg1, 5), None
 
         # Handle short load store instructions
         if opcode >= 0x18 and opcode <= 0x2b:
@@ -700,6 +700,16 @@ class V850(Architecture):
                 tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[dst_reg])]
             tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ']')]
 
+        if instr in ['mul', 'mulu']:
+            if immed is not None:
+                tokens += [InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(immed), immed)]
+            else:
+                tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[src_reg])]
+            tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ', ')]
+            tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[dst_reg])]
+            tokens += [InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ', ')]
+            tokens += [InstructionTextToken(InstructionTextTokenType.RegisterToken, Registers[reg3])]
+
         if instr == 'jmp':
             if immed is not None:
                 tokens += [InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(immed), immed)]
@@ -773,7 +783,7 @@ class V850(Architecture):
         if instr is None:
             return None
 
-        if instr in ['nop', 'synce', 'syncm', 'syncp']:
+        if instr in ['nop', 'synce', 'syncm', 'syncp', 'di', 'ei']:
             # TODO - something better we can emit for sync instructions?
             il.append(il.nop())
         elif instr in ['feret', 'eiret', 'ctret', 'reti']:
@@ -848,6 +858,12 @@ class V850(Architecture):
             #     il.append(il.set_reg(4, Registers[dst_reg], il.const(4, addr + length)))
             # il.append(il.set_reg(4, Registers[dst_reg], il.const(4, addr + length)))
             # il.append(il.jump(il.const_pointer(4, branch_target)))
+            # TODO -consider this
+            # if dst_reg == Registers.index('lp'):
+            #     il.append(il.call(il.const_pointer(4, branch_target)))
+            # else:
+            #     il.append(il.set_reg(4, Registers[dst_reg], il.const(4, addr + length)))
+            #     il.append(il.jump(il.const_pointer(4, branch_target)))
         elif instr == 'jr':
             branch_target = sign_extend(immed, 32) + addr
             il.append(il.jump(il.const(4, branch_target)))
@@ -867,6 +883,21 @@ class V850(Architecture):
             il.append(to_il_set_reg(il, Registers[dst_reg], il.sub(4, to_il_src_reg(il, dst_reg), to_il_src_reg(il, src_reg), flags='*')))
         elif instr == 'subr':
             il.append(to_il_set_reg(il, Registers[dst_reg], il.sub(4, to_il_src_reg(il, src_reg), to_il_src_reg(il, dst_reg), flags='*')))
+        elif instr in ['mul', 'mulu']:
+            operation = il.mult_double_prec_signed if instr == 'mul' else il.mult_double_prec_unsigned
+            dst_hi = Registers[reg3]
+            dst_lo = Registers[dst_reg]
+            op1 = to_il_src_reg(il, src_reg) if immed is None else il.const(4, immed)
+            mul_result = operation(8, to_il_src_reg(il, dst_reg), op1)
+            il.append(to_il_set_reg(il, dst_hi, il.logical_shift_right(4, mul_result, il.const(4, 32))))
+            if dst_hi != dst_lo:
+                # we're not discarding the low 32 bits
+                il.append(to_il_set_reg(il, dst_lo, mul_result))
+        elif instr == 'mulh':
+            src = to_il_src_reg(il, src_reg, 2) if immed is None else il.const(2, immed)
+            il.append(to_il_set_reg(il, Registers[dst_reg], il.mult(4, src, to_il_src_reg(il, dst_reg, 2))))
+        elif instr == 'mulhi':
+            il.append(to_il_set_reg(il, Registers[dst_reg], il.mult(4, il.const(2, immed), to_il_src_reg(il, src_reg, 2))))
         elif instr == 'cmp':
             src = to_il_src_reg(il, src_reg) if immed is None else il.const(4, immed)
             il.append(il.sub(4, to_il_src_reg(il, dst_reg), src, flags='*'))
